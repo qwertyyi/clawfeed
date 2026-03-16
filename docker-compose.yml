@@ -1,0 +1,33 @@
+services:
+  clawfeed:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8767:8767"
+    environment:
+      - NODE_ENV=production
+      - DIGEST_HOST=0.0.0.0
+      - DIGEST_PORT=8767
+      # Optional: move DB under /app/data (default already does)
+      - DIGEST_DB=/app/data/digest.db
+      # Optional: allow reverse-proxy base path
+      # - BASE_PATH=/digest
+    env_file:
+      # IMPORTANT: create your own `.env` (do not commit secrets)
+      - ./.env
+    volumes:
+      # Cross-platform persistence (Docker managed volumes)
+      - clawfeed-data:/app/data
+      - clawfeed-media:/app/media
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8767/api/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  clawfeed-data:
+  clawfeed-media:

@@ -1,0 +1,7 @@
+services:
+  clawfeed:
+    # VM override: bind-mount to host /docker
+    volumes:
+      - /docker/clawfeed/data:/app/data
+      - /docker/clawfeed/media:/app/media
+
