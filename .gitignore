@@ -1,6 +1,28 @@
+# 环境变量
 .env
+
+# Node
 node_modules/
+
+# 数据目录
 data/
+
+# 数据库
 *.db
 *.db-shm
 *.db-wal
+
+# macOS
+.DS_Store
+
+# 日志
+logs/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# 媒体文件
+media/videos/
+media/images/
+
