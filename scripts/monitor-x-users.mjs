@@ -2,14 +2,20 @@ import { getDb } from '../src/db.mjs';
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { ProxyAgent } from "undici";
-
+import { ProxyAgent, setGlobalDispatcher } from "undici";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 
-// 代理
-const proxy = process.env.HTTP_PROXY;
-const agent = proxy ? new ProxyAgent(proxy) : undefined;
+
+const proxy =
+  process.env.HTTPS_PROXY ||
+  process.env.HTTP_PROXY ||
+  "http://127.0.0.1:7897";
+
+console.log("Using proxy:", proxy);
+
+setGlobalDispatcher(new ProxyAgent(proxy));
+
 
 // 媒体目录
 const MEDIA_DIR = join(ROOT, "media");
@@ -109,8 +115,7 @@ async function fetchTweets(userId) {
     `&user.fields=name,username,verified,profile_image_url,public_metrics`;
 
   const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${TOKEN}` },
-    dispatcher: agent
+    headers: { Authorization: `Bearer ${TOKEN}` }
   });
 
   const json = await res.json();
@@ -149,7 +154,7 @@ async function downloadFile(url, path) {
 
     if (existsSync(path)) return;
 
-    const res = await fetch(url, { dispatcher: agent });
+    const res = await fetch(url);
     const buffer = Buffer.from(await res.arrayBuffer());
 
     writeFileSync(path, buffer);
@@ -272,7 +277,6 @@ async function handleTextImages(tweetId, text) {
       while (redirectCount < maxRedirects) {
         const res = await fetch(currentUrl, { 
           method: 'HEAD',
-          dispatcher: agent,
           redirect: 'manual'
         });
 
