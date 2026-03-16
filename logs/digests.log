@@ -1,0 +1,26 @@
+Generating 4h digest...
+Fetching Hacker News stories with filter: new, min_score: 1
+Successfully fetched 15 stories
+Successfully created 4h digest with ID: 3
+Generating 4h digest...
+Fetching Hacker News stories with filter: new, min_score: 1
+Successfully fetched 12 stories
+Successfully created 4h digest with ID: 4
+Generating 4h digest...
+Fetching Hacker News stories with filter: new, min_score: 1
+Successfully fetched 15 stories
+Successfully created 4h digest with ID: 6
+Script exited with code: 0
+Generating 4h digest...
+Fetching Hacker News stories with filter: new, min_score: 1
+Fetching Hacker News stories with filter: new, min_score: 1
+Successfully fetched 15 stories
+Successfully created 4h digest with ID: 22
+Script exited with code: 0
+Generating 4h digest...
+Fetching Hacker News stories with filter: new, min_score: 1
+Fetching Hacker News stories with filter: new, min_score: 1
+Successfully fetched 15 stories
+Successfully created 4h digest with ID: 23
+Script exited with code: 0
+Script exited with code: 0

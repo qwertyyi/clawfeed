@@ -1,0 +1,9 @@
+Starting digest generation at 2026年 3月 9日 星期一 09时47分58秒 CST
+Generating 4h digest...
+Fetching Hacker News stories with filter: new, min_score: 1
+Fetching Hacker News stories with filter: new, min_score: 1
+Successfully fetched 15 stories
+Successfully created 4h digest with ID: 9
+Successfully fetched 15 stories
+Successfully created 4h digest with ID: 10
+Script exited with code: 0

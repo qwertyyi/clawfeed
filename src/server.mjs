@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { randomBytes, createHmac, timingSafeEqual } from 'crypto';
 import { lookup } from 'dns/promises';
 import { isIP } from 'net';
-import { getDb, listDigests, getDigest, createDigest, listMarks, createMark, deleteMark, getConfig, setConfig, upsertUser, createSession, getSession, deleteSession, listSources, getSource, createSource, updateSource, deleteSource, getSourceByTypeConfig, getUserBySlug, listDigestsByUser, countDigestsByUser, createPack, getPack, getPackBySlug, listPacks, incrementPackInstall, deletePack, listSubscriptions, subscribe, unsubscribe, bulkSubscribe, isSubscribed, createFeedback, getUserFeedback, getAllFeedback, replyToFeedback, updateFeedbackStatus, markFeedbackRead, getUnreadFeedbackCount } from './db.mjs';
+import { getDb, listDigests, getDigest, createDigest, listMarks, createMark, deleteMark, getConfig, setConfig, upsertUser, createSession, getSession, deleteSession, listSources, getSource, createSource, updateSource, deleteSource, getSourceByTypeConfig, getUserBySlug, listDigestsByUser, countDigestsByUser, createPack, getPack, getPackBySlug, listPacks, incrementPackInstall, deletePack, listSubscriptions, subscribe, unsubscribe, bulkSubscribe, isSubscribed, createFeedback, getUserFeedback, getAllFeedback, replyToFeedback, updateFeedbackStatus, markFeedbackRead, getUnreadFeedbackCount, listTweets } from './db.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -33,6 +33,12 @@ const PORT = process.env.DIGEST_PORT || env.DIGEST_PORT || 8767;
 const OAUTH_STATE_SECRET = env.OAUTH_STATE_SECRET || process.env.OAUTH_STATE_SECRET || SESSION_SECRET || API_KEY || 'dev-state-secret';
 const MAX_BODY_BYTES = 1024 * 1024;
 const DB_PATH = process.env.DIGEST_DB || join(ROOT, 'data', 'digest.db');
+
+// Twitter API credentials
+const TWITTER_API_KEY = env.TWITTER_API_KEY || process.env.TWITTER_API_KEY || '';
+const TWITTER_API_SECRET = env.TWITTER_API_SECRET || process.env.TWITTER_API_SECRET || '';
+const TWITTER_ACCESS_TOKEN = env.TWITTER_ACCESS_TOKEN || process.env.TWITTER_ACCESS_TOKEN || '';
+const TWITTER_ACCESS_TOKEN_SECRET = env.TWITTER_ACCESS_TOKEN_SECRET || process.env.TWITTER_ACCESS_TOKEN_SECRET || '';
 
 mkdirSync(join(ROOT, 'data'), { recursive: true });
 const db = getDb(DB_PATH);
@@ -161,29 +167,135 @@ async function assertSafeFetchUrl(rawUrl) {
 }
 
 // ── Google OAuth helpers ──
-function httpsGet(url) {
+function httpsGet(url, options = {}) {
   return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => resolve({ status: res.statusCode, body: data }));
-    }).on('error', reject);
+    const proxyUrl = env.HTTPS_PROXY || env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+    const headers = options.headers || {};
+    if (proxyUrl) {
+      const proxy = new URL(proxyUrl);
+      const requestOptions = {
+        host: proxy.hostname,
+        port: proxy.port || 8080,
+        path: url,
+        headers: { ...headers, Host: new URL(url).hostname }
+      };
+      http.get(requestOptions, (res) => {
+        let data = '';
+        res.on('data', c => data += c);
+        res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      }).on('error', reject);
+    } else {
+      const urlObj = new URL(url);
+      const requestOptions = {
+        hostname: urlObj.hostname,
+        port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
+        path: urlObj.pathname + urlObj.search,
+        headers: headers
+      };
+      https.get(requestOptions, (res) => {
+        let data = '';
+        res.on('data', c => data += c);
+        res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      }).on('error', reject);
+    }
   });
 }
 
-function httpsPost(url, body) {
+// Generate OAuth 1.0a signature
+function generateOAuthSignature(method, url, params, consumerKey, consumerSecret, token, tokenSecret, nonce, timestamp) {
+  const urlObj = new URL(url);
+  const normalizedUrl = `${urlObj.protocol}//${urlObj.hostname}${urlObj.pathname}`;
+
+  // Get query parameters from URL
+  const queryParams = {};
+  urlObj.searchParams.forEach((value, key) => {
+    queryParams[key] = value;
+  });
+
+  // Normalize parameters - combine URL query params with provided params
+  const allParams = { ...queryParams, ...params };
+  allParams.oauth_consumer_key = consumerKey;
+  allParams.oauth_nonce = nonce;
+  allParams.oauth_signature_method = 'HMAC-SHA1';
+  allParams.oauth_timestamp = timestamp;
+  allParams.oauth_version = '1.0';
+  if (token) allParams.oauth_token = token;
+
+  // Sort parameters
+  const sortedParams = Object.keys(allParams).sort().map(key => 
+    `${encodeURIComponent(key)}=${encodeURIComponent(allParams[key])}`
+  ).join('&');
+
+  // Create signature base string
+  const signatureBaseString = `${method.toUpperCase()}&${encodeURIComponent(normalizedUrl)}&${encodeURIComponent(sortedParams)}`;
+
+  // Create signing key
+  const signingKey = `${encodeURIComponent(consumerSecret)}&${encodeURIComponent(tokenSecret || '')}`;
+
+  // Generate signature
+  const signature = createHmac('sha1', signingKey).update(signatureBaseString).digest('base64');
+
+  return signature;
+}
+
+// Generate OAuth 1.0a Authorization header
+function generateOAuthHeader(method, url, params, consumerKey, consumerSecret, token, tokenSecret) {
+  const nonce = randomBytes(16).toString('hex');
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+
+  const signature = generateOAuthSignature(method, url, params, consumerKey, consumerSecret, token, tokenSecret, nonce, timestamp);
+
+  const oauthParams = {
+    oauth_consumer_key: consumerKey,
+    oauth_nonce: nonce,
+    oauth_signature: signature,
+    oauth_signature_method: 'HMAC-SHA1',
+    oauth_timestamp: timestamp,
+    oauth_version: '1.0'
+  };
+
+  if (token) oauthParams.oauth_token = token;
+
+  const oauthHeader = Object.keys(oauthParams).sort().map(key => 
+    `${encodeURIComponent(key)}="${encodeURIComponent(oauthParams[key])}"`
+  ).join(', ');
+
+  return `OAuth ${oauthHeader}`;
+}
+
+function httpsPost(url, body, options = {}) {
   const u = new URL(url);
+  const proxyUrl = env.HTTPS_PROXY || env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+  const postData = typeof body === 'string' ? body : new URLSearchParams(body).toString();
+  
   return new Promise((resolve, reject) => {
-    const postData = typeof body === 'string' ? body : new URLSearchParams(body).toString();
-    const req = https.request({
-      hostname: u.hostname, path: u.pathname + u.search,
+    const requestOptions = {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(postData) }
-    }, (res) => {
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => resolve({ status: res.statusCode, body: data }));
-    });
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(postData), ...options.headers }
+    };
+    
+    let req;
+    if (proxyUrl) {
+      const proxy = new URL(proxyUrl);
+      requestOptions.host = proxy.hostname;
+      requestOptions.port = proxy.port || 8080;
+      requestOptions.path = url;
+      requestOptions.headers.Host = u.hostname;
+      req = http.request(requestOptions, (res) => {
+        let data = '';
+        res.on('data', c => data += c);
+        res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      });
+    } else {
+      requestOptions.hostname = u.hostname;
+      requestOptions.path = u.pathname + u.search;
+      req = https.request(requestOptions, (res) => {
+        let data = '';
+        res.on('data', c => data += c);
+        res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      });
+    }
+    
     req.on('error', reject);
     req.write(postData);
     req.end();
@@ -248,6 +360,166 @@ function extractRssPreview(xml) {
     items.push({ title: t ? t[1].trim() : '(untitled)', url: l ? l[1].trim() : '' });
   }
   return items;
+}
+
+// Fetch tweets from Twitter API
+async function fetchTweets(handle, count = 10) {
+  console.log('[fetchTweets] Starting to fetch tweets for handle:', handle);
+
+  // Check for Twitter API credentials in environment variables
+  const apiKey = env.TWITTER_API_KEY || process.env.TWITTER_API_KEY;
+  const apiSecret = env.TWITTER_API_SECRET || process.env.TWITTER_API_SECRET;
+  const accessToken = env.TWITTER_ACCESS_TOKEN || process.env.TWITTER_ACCESS_TOKEN;
+  const accessTokenSecret = env.TWITTER_ACCESS_TOKEN_SECRET || process.env.TWITTER_ACCESS_TOKEN_SECRET;
+
+  if (!apiKey || !apiSecret || !accessToken || !accessTokenSecret) {
+    console.error('[fetchTweets] Twitter API credentials not configured');
+    throw new Error('Twitter API credentials not configured');
+  }
+
+  const cleanUsername = handle.replace('@', '');
+  console.log('[fetchTweets] Fetching user: @' + cleanUsername);
+
+  // Fetch user by username using OAuth 1.0a
+  const userEndpoint = `https://api.twitter.com/2/users/by/username/${cleanUsername}`;
+  console.log('[fetchTweets] Fetching user from:', userEndpoint);
+
+  const authHeader = generateOAuthHeader('GET', userEndpoint, {}, apiKey, apiSecret, accessToken, accessTokenSecret);
+  console.log('[fetchTweets] Authorization header:', authHeader);
+
+  let userResp;
+  try {
+    userResp = await httpsGet(userEndpoint, {
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'User-Agent': 'ClawFeed/1.0'
+      }
+    });
+    console.log('[fetchTweets] User response status:', userResp.status);
+    console.log('[fetchTweets] User response body:', userResp.body);
+  } catch (e) {
+    console.error('[fetchTweets] Error fetching user:', e);
+    throw e;
+  }
+  
+  if (userResp.status !== 200) {
+    console.error('[fetchTweets] Failed to fetch user:', userResp.status);
+    throw new Error(`Failed to fetch user: ${userResp.status}`);
+  }
+  
+  const userData = JSON.parse(userResp.body);
+  const userId = userData.data.id;
+  console.log('[fetchTweets] Got user ID:', userId);
+  
+  const tweetsEndpoint = `https://api.twitter.com/2/users/${userId}/tweets?max_results=${count}&tweet.fields=created_at,text`;
+  console.log('[fetchTweets] Fetching tweets from:', tweetsEndpoint);
+
+  const tweetsAuthHeader = generateOAuthHeader('GET', tweetsEndpoint, {}, apiKey, apiSecret, accessToken, accessTokenSecret);
+  let tweetsResp;
+  try {
+    tweetsResp = await httpsGet(tweetsEndpoint, {
+      headers: {
+        'Authorization': tweetsAuthHeader,
+        'Content-Type': 'application/json',
+        'User-Agent': 'ClawFeed/1.0'
+      }
+    });
+    console.log('[fetchTweets] Tweets response status:', tweetsResp.status);
+    console.log('[fetchTweets] Tweets response body:', tweetsResp.body);
+  } catch (e) {
+    console.error('[fetchTweets] Error fetching tweets:', e);
+    throw e;
+  }
+  
+  if (tweetsResp.status !== 200) {
+    console.error('[fetchTweets] Failed to fetch tweets:', tweetsResp.status);
+    throw new Error(`Failed to fetch tweets: ${tweetsResp.status}`);
+  }
+  
+  const tweetsData = JSON.parse(tweetsResp.body);
+  console.log('[fetchTweets] Successfully fetched tweets:', tweetsData.data?.length || 0);
+  return tweetsData.data || [];
+}
+
+async function fetchHackerNewsStories(sourceId) {
+  console.log('[fetchHackerNewsStories] Starting to fetch Hacker News stories for source:', sourceId);
+  
+  // Get source configuration
+  const source = getSource(db, sourceId);
+  if (!source || source.type !== 'hackernews') {
+    throw new Error('Invalid Hacker News source');
+  }
+  
+  const config = typeof source.config === 'string' ? JSON.parse(source.config) : source.config;
+  const filter = config.filter || 'top';
+  const minScore = config.min_score || 100;
+  
+  console.log('[fetchHackerNewsStories] Fetching Hacker News stories with filter:', filter, 'min_score:', minScore);
+  
+  // Fetch stories from Hacker News API
+  let hnEndpoint;
+  if (filter === 'top') {
+    hnEndpoint = 'https://hacker-news.firebaseio.com/v0/topstories.json';
+  } else if (filter === 'new') {
+    hnEndpoint = 'https://hacker-news.firebaseio.com/v0/newstories.json';
+  } else if (filter === 'best') {
+    hnEndpoint = 'https://hacker-news.firebaseio.com/v0/beststories.json';
+  } else {
+    hnEndpoint = 'https://hacker-news.firebaseio.com/v0/topstories.json';
+  }
+  
+  console.log('[fetchHackerNewsStories] Fetching story IDs from:', hnEndpoint);
+  
+  let storyIdsResp;
+  try {
+    storyIdsResp = await httpsGet(hnEndpoint, {
+      headers: {
+        'User-Agent': 'ClawFeed/1.0'
+      }
+    });
+    console.log('[fetchHackerNewsStories] Story IDs response status:', storyIdsResp.status);
+  } catch (e) {
+    console.error('[fetchHackerNewsStories] Error fetching story IDs:', e);
+    throw e;
+  }
+  
+  if (storyIdsResp.status !== 200) {
+    console.error('[fetchHackerNewsStories] Failed to fetch story IDs:', storyIdsResp.status);
+    throw new Error(`Failed to fetch story IDs: ${storyIdsResp.status}`);
+  }
+  
+  const storyIds = JSON.parse(storyIdsResp.body);
+  console.log('[fetchHackerNewsStories] Got story IDs:', storyIds.length);
+  
+  // Limit to first 30 stories
+  const limitedStoryIds = storyIds.slice(0, 30);
+  
+  // Fetch details for each story
+  const stories = [];
+  for (const id of limitedStoryIds) {
+    const itemEndpoint = `https://hacker-news.firebaseio.com/v0/item/${id}.json`;
+    try {
+      const itemResp = await httpsGet(itemEndpoint, {
+        headers: {
+          'User-Agent': 'ClawFeed/1.0'
+        }
+      });
+      
+      if (itemResp.status === 200) {
+        const item = JSON.parse(itemResp.body);
+        // Filter by minimum score
+        if (item && item.score >= minScore) {
+          stories.push(item);
+        }
+      }
+    } catch (e) {
+      console.error(`[fetchHackerNewsStories] Error fetching story ${id}:`, e);
+    }
+  }
+  
+  console.log('[fetchHackerNewsStories] Successfully fetched stories:', stories.length);
+  return stories;
 }
 
 async function resolveSourceUrl(url) {
@@ -536,6 +808,15 @@ const server = createServer(async (req, res) => {
       return json(res, result, 201);
     }
 
+    // ── Tweets endpoints (public) ──
+
+    if (req.method === 'GET' && path === '/api/tweets') {
+      const limit = parseInt(params.get('limit') || '100');
+      const offset = parseInt(params.get('offset') || '0');
+      const user = params.get('user') || undefined;
+      return json(res, listTweets(db, { limit, offset, user }));
+    }
+
     // ── Marks endpoints (auth required) ──
 
     if (req.method === 'GET' && path === '/api/marks') {
@@ -610,6 +891,36 @@ const server = createServer(async (req, res) => {
       if (!req.user) return json(res, { error: 'not authenticated' }, 401);
       unsubscribe(db, req.user.id, parseInt(subMatch[1]));
       return json(res, { ok: true });
+    }
+
+    // ── Twitter fetch endpoint ──
+    if (req.method === 'POST' && path === '/api/twitter/fetch') {
+      if (!req.user) return json(res, { error: 'login required' }, 401);
+      const body = await parseBody(req);
+      const handle = (body.handle || '').trim();
+      const count = parseInt(body.count || '10');
+      if (!handle) return json(res, { error: 'handle required' }, 400);
+
+      try {
+        const tweets = await fetchTweets(handle, count);
+        return json(res, { tweets });
+      } catch (e) {
+        return json(res, { error: e.message || 'failed to fetch tweets' }, 500);
+      }
+    }
+
+    if (req.method === 'POST' && path === '/api/hackernews/fetch') {
+      if (!req.user) return json(res, { error: 'login required' }, 401);
+      const body = await parseBody(req);
+      const sourceId = parseInt(body.sourceId);
+      if (!sourceId) return json(res, { error: 'sourceId required' }, 400);
+
+      try {
+        const stories = await fetchHackerNewsStories(sourceId);
+        return json(res, { stories });
+      } catch (e) {
+        return json(res, { error: e.message || 'failed to fetch Hacker News stories' }, 500);
+      }
     }
 
     // ── Source resolve endpoint ──

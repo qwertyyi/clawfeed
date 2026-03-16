@@ -1,13 +1,15 @@
 {
   "name": "clawfeed",
   "version": "0.8.1",
-  "description": "AI-powered news digest tool \u2014 generates structured summaries from Twitter/RSS feeds",
+  "description": "AI-powered news digest tool — generates structured summaries from Twitter/RSS feeds",
   "type": "module",
   "scripts": {
     "start": "node src/server.mjs",
     "dev": "node --watch src/server.mjs",
     "lint": "eslint src/",
-    "test": "bash test/e2e.sh"
+    "test": "bash test/e2e.sh",
+    "fetch-articles": "node scripts/fetch-articles.mjs",
+    "fetch-articles:digest": "node scripts/fetch-articles.mjs"
   },
   "devDependencies": {
     "eslint": "^9.0.0"
@@ -21,6 +23,9 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "better-sqlite3": "^11.0.0"
+    "axios": "^1.13.6",
+    "better-sqlite3": "^11.10.0",
+    "playwright": "^1.58.2",
+    "undici": "^7.24.0"
   }
 }

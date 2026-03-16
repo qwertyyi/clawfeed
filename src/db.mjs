@@ -102,6 +102,21 @@ export function getDb(dbPath) {
   } catch (e) {
     if (!e.message.includes('duplicate column')) console.error('Migration 009:', e.message);
   }
+  // Migration 010: articles table
+  try {
+    const sql10 = readFileSync(join(ROOT, 'migrations', '010_articles.sql'), 'utf8');
+    _db.exec(sql10);
+  } catch (e) {
+    if (!e.message.includes('already exists')) console.error('Migration 010:', e.message);
+  }
+  // Migration 011: media table
+  try {
+    const sql11 = readFileSync(join(ROOT, 'migrations', '011_media.sql'), 'utf8');
+    _db.exec(sql11);
+    console.log('Migration 011: media table created');
+  } catch (e) {
+    if (!e.message.includes('already exists')) console.error('Migration 011:', e.message);
+  }
   // Backfill slugs for existing users
   _backfillSlugs(_db);
   return _db;
@@ -454,4 +469,61 @@ export function getConfig(db) {
 export function setConfig(db, key, value) {
   const v = typeof value === 'string' ? value : JSON.stringify(value);
   db.prepare('INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)').run(key, v);
+}
+
+// ── Articles ──
+
+export function createArticle(db, { url, title, content, summary = '', source = '', author = '', publishedAt, digestId, metadata = '{}', language = 'en' }) {
+  const wordCount = content ? content.split(/\s+/).length : 0;
+  const result = db.prepare(
+    `INSERT INTO articles (url, title, content, summary, source, author, published_at, digest_id, metadata, word_count, language)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(url, title, content, summary, source, author, publishedAt, digestId, metadata, wordCount, language);
+  return { id: result.lastInsertRowid };
+}
+
+export function getArticle(db, id) {
+  return db.prepare('SELECT * FROM articles WHERE id = ?').get(id);
+}
+
+export function getArticleByUrl(db, url) {
+  return db.prepare('SELECT * FROM articles WHERE url = ?').get(url);
+}
+
+export function listArticles(db, { limit = 20, offset = 0, digestId, source, language } = {}) {
+  let sql = 'SELECT * FROM articles';
+  const params = [];
+  const conditions = [];
+  if (digestId) { conditions.push('digest_id = ?'); params.push(digestId); }
+  if (source) { conditions.push('source = ?'); params.push(source); }
+  if (language) { conditions.push('language = ?'); params.push(language); }
+  if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
+  sql += ' ORDER BY fetched_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+  return db.prepare(sql).all(...params);
+}
+
+export function updateArticle(db, id, { content, summary, metadata }) {
+  const updates = [];
+  const params = [];
+  if (content !== undefined) { updates.push('content = ?'); params.push(content); }
+  if (summary !== undefined) { updates.push('summary = ?'); params.push(summary); }
+  if (metadata !== undefined) { updates.push('metadata = ?'); params.push(metadata); }
+  if (updates.length === 0) return;
+  params.push(id);
+  const sql = `UPDATE articles SET ${updates.join(', ')} WHERE id = ?`;
+  return db.prepare(sql).run(...params);
+}
+
+// ── Tweets ──
+
+export function listTweets(db, { limit = 100, offset = 0, user } = {}) {
+  let sql = 'SELECT * FROM tweets';
+  const params = [];
+  const conditions = [];
+  if (user) { conditions.push('user = ?'); params.push(user); }
+  if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
+  sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+  return db.prepare(sql).all(...params);
 }
