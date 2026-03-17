@@ -1,6 +1,9 @@
 services:
   clawfeed:
     # VM override: bind-mount to host /docker
+    # Bind mounts on Linux are often owned by root; run as root to avoid SQLITE_CANTOPEN.
+    # (Recommended alternative: chown /docker/clawfeed/{data,media} to uid 1000 and remove this.)
+    user: "0:0"
     volumes:
       - /docker/clawfeed/data:/app/data
       - /docker/clawfeed/media:/app/media
